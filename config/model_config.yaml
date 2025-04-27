@@ -2,15 +2,15 @@
 # This file defines the available models and their configurations
 
 # Default model settings
-default_model: "claude-3-7-sonnet"
-default_openrouter_model: "anthropic/claude-3-7-sonnet"
+default_model: "deepseek-chat"
+default_openrouter_model: "deepseek/deepseek-chat-v3-0324"
 
 # Model providers
 providers:
   # Direct API providers
   direct:
     anthropic:
-      enabled: true
+      enabled: false  # Disabled direct Anthropic API
       models:
         - name: "claude-3-7-sonnet"
           model_name: "claude-3-7-sonnet-20250219"
@@ -26,7 +26,7 @@ providers:
           use_caching: true
 
     openai:
-      enabled: true
+      enabled: false  # Disabled direct OpenAI API
       models:
         - name: "gpt-4o"
           model_name: "gpt-4o-2024-05-13"
@@ -41,7 +41,7 @@ providers:
 
   # OpenRouter provider
   openrouter:
-    enabled: true  # Set to true to enable OpenRouter
+    enabled: true  # Enabled OpenRouter
     api_key_env: "OPENROUTER_API_KEY"  # Environment variable for API key
     models:
       - name: "claude-3-7-sonnet"
@@ -68,8 +68,12 @@ providers:
         model_name: "deepseek/deepseek-chat-v3-0324"
         description: "DeepSeek Chat v3 via OpenRouter"
         max_tokens: 8192
+      - name: "openai-o1"
+        model_name: "openai/o1"
+        description: "OpenAI o1 via OpenRouter"
+        max_tokens: 16384
 
 # Purpose-specific model assignments
 purpose_models:
   agent: "deepseek-chat"  # Model for main agent (using DeepSeek via OpenRouter)
-  ensembler: "o1"  # Model for ensembler (using direct OpenAI API)
+  ensembler: "openai-o1"  # Model for ensembler (using OpenAI o1 via OpenRouter)

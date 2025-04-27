@@ -271,22 +271,22 @@ The system uses a YAML configuration file at `config/model_config.yaml` to manag
 
 ```yaml
 # Default model settings
-default_model: "claude-3-7-sonnet"
-default_openrouter_model: "anthropic/claude-3-7-sonnet"
+default_model: "deepseek-chat"
+default_openrouter_model: "deepseek/deepseek-chat-v3-0324"
 
 # Model providers
 providers:
   # Direct API providers
   direct:
     anthropic:
-      enabled: true
+      enabled: false  # Disabled direct Anthropic API
       models:
         - name: "claude-3-7-sonnet"
           model_name: "claude-3-7-sonnet-20250219"
           # Additional parameters...
 
     openai:
-      enabled: true
+      enabled: false  # Disabled direct OpenAI API
       models:
         - name: "gpt-4o"
           model_name: "gpt-4o-2024-05-13"
@@ -294,7 +294,7 @@ providers:
 
   # OpenRouter provider
   openrouter:
-    enabled: true  # Set to true to enable OpenRouter
+    enabled: true  # Enabled OpenRouter
     api_key_env: "OPENROUTER_API_KEY"
     models:
       - name: "claude-3-7-sonnet"
@@ -309,40 +309,57 @@ providers:
         model_name: "meta-llama/llama-3-70b-instruct"
         description: "Llama 3 70B via OpenRouter"
         max_tokens: 4096
+      - name: "openai-o1"
+        model_name: "openai/o1"
+        description: "OpenAI o1 via OpenRouter"
+        max_tokens: 16384
 
 # Purpose-specific model assignments
 purpose_models:
   agent: "deepseek-chat"  # Using DeepSeek Chat via OpenRouter
-  ensembler: "o1"  # Using OpenAI o1 directly
+  ensembler: "openai-o1"  # Using OpenAI o1 via OpenRouter
 ```
 
 To use OpenRouter models, set `providers.openrouter.enabled` to `true` and ensure you have set the `OPENROUTER_API_KEY` environment variable.
 
-#### Using DeepSeek Chat via OpenRouter
+#### Using OpenRouter for All Models
 
-When Anthropic API credits are low, you can use the DeepSeek Chat model via OpenRouter as an alternative:
+This configuration uses OpenRouter for all models, which provides several benefits:
+
+1. **Single API Key**: You only need an OpenRouter API key, not separate API keys for each provider
+2. **Cost Management**: OpenRouter often provides more cost-effective access to various models
+3. **Model Flexibility**: Easy to switch between different models from various providers
+
+To use OpenRouter for all models:
 
 1. Make sure you have an OpenRouter API key and set it in your environment:
    ```bash
    export OPENROUTER_API_KEY=your_openrouter_api_key_here
    ```
 
-2. Update the `config/model_config.yaml` file to enable OpenRouter and set DeepSeek as the agent model:
+2. Ensure the `config/model_config.yaml` file has OpenRouter enabled and direct providers disabled:
    ```yaml
    providers:
+     direct:
+       anthropic:
+         enabled: false
+       openai:
+         enabled: false
      openrouter:
        enabled: true
-
-   purpose_models:
-     agent: "deepseek-chat"
    ```
 
-3. Run the CLI as usual:
+3. Set your preferred models in the purpose_models section:
+   ```yaml
+   purpose_models:
+     agent: "deepseek-chat"  # Using DeepSeek Chat via OpenRouter
+     ensembler: "openai-o1"  # Using OpenAI o1 via OpenRouter
+   ```
+
+4. Run the CLI as usual:
    ```bash
    python cli.py
    ```
-
-The system will automatically use the DeepSeek Chat model via OpenRouter for the agent.
 
 ## Contributing
 
