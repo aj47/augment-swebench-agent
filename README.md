@@ -25,7 +25,9 @@ Since Anthropic's models are currently state-of-the-art on code, we used Claude 
 
 ### Prerequisites
 
-- [Docker](https://www.docker.com/) (We tested with `Docker version 26.1.3, build 26.1.3-0ubuntu1~22.04.1`.)
+- **Docker**:
+  - Linux: [Docker Engine](https://www.docker.com/) (We tested with `Docker version 26.1.3, build 26.1.3-0ubuntu1~22.04.1`.)
+  - macOS: [Docker Desktop for Mac](https://www.docker.com/products/docker-desktop/)
 - Anthropic API key (for Claude models)
 - OpenAI API key (for OpenAI models)
 - OpenRouter API key (optional, for using models via OpenRouter)
@@ -127,10 +129,22 @@ You can increase `--num-examples` and `--num-candidate-solutions` to run on more
 
 To run on specific problems by their IDs:
 ```bash
-python run_agent_on_swebench_problem.py --problem-ids "django-django-10006" "django-django-10007" --num-candidate-solutions 2
+python run_agent_on_swebench_problem.py --problem-ids "django__django-10006" "django__django-10007" --num-candidate-solutions 2
 ```
 
 This will run only on the specified problem IDs, generating 2 candidate solutions for each.
+
+### macOS-Specific Runner
+
+If you're using macOS, we provide a specialized script that handles Docker socket connections properly:
+
+```bash
+python run_swebench_mac.py --problem-ids "django__django-10097" --num-candidate-solutions 1
+```
+
+This script is specifically designed to work with Docker Desktop on macOS. For more details, see the [SWEBENCH_MAC_README.md](SWEBENCH_MAC_README.md) file.
+
+### Finding Problem IDs
 
 To list available problem IDs for selection, use the included utility script:
 ```bash
@@ -153,7 +167,7 @@ python list_swebench_problems.py --details --limit 5
 - `--num-processes`: Number of processes to use for each example (default: 8)
 - `--num-candidate-solutions`: Number of candidate solutions to generate for each example (default: 8)
 
-### Running on more examples.
+### Running on more examples
 
 There are 500 examples total in SWE-bench Verified. Note that this can take awhile, so there are a few levels of parallelism this repository supports.
 - Firstly, we suggest running 8 processes. This is the `--num-processes` flag. Beyond this, Docker hits issues.
@@ -168,6 +182,39 @@ Suppose you want to run with 10 shards and 8 processes per shard, then that woul
 ```bash
 python run_agent_on_swebench_problem.py --shard-ct 10 --shard-id <worker_index> > logs.out 2> logs.err
 ```
+
+### Troubleshooting Docker Issues
+
+If you encounter Docker-related errors when running SWEBench, such as:
+
+```
+Error processing example: Error while fetching server API version: ('Connection aborted.', FileNotFoundError(2, 'No such file or directory'))
+```
+
+Try the following solutions:
+
+1. **Check Docker Installation**: Ensure Docker is properly installed and running:
+   ```bash
+   docker info
+   docker run hello-world
+   ```
+
+2. **macOS Users**: If you're on macOS, use the specialized script that handles Docker socket connections properly:
+   ```bash
+   python run_swebench_mac.py --problem-ids "your_problem_id" --num-candidate-solutions 1
+   ```
+
+3. **Docker Socket Location**: The Docker socket location varies by platform:
+   - Linux: `/var/run/docker.sock`
+   - macOS: `~/Library/Containers/com.docker.docker/Data/docker-cli.sock`
+
+4. **Docker Permissions**: Ensure your user has permissions to access Docker:
+   - Linux: `sudo usermod -aG docker $USER` (requires logout/login)
+   - macOS: Docker Desktop handles permissions automatically
+
+5. **Restart Docker**: Sometimes simply restarting the Docker daemon resolves connection issues:
+   - Linux: `sudo systemctl restart docker`
+   - macOS: Restart Docker Desktop application
 
 ### Majority Vote Ensembler
 
