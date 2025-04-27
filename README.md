@@ -15,6 +15,7 @@ Since Anthropic's models are currently state-of-the-art on code, we used Claude 
   - Sequential thinking for complex problem-solving
 - Prompt template + system prompt from our SWE-bench submission.
 - Integration with Anthropic's Claude for core agent and OpenAI models for ensembling
+- Support for OpenRouter models via LiteLLM with configurable model selection
 - Command approval management for safe execution
 - Majority vote ensembler for selecting the best solution from multiple candidates
 - Support for running agent in a Docker container
@@ -27,6 +28,7 @@ Since Anthropic's models are currently state-of-the-art on code, we used Claude 
 - [Docker](https://www.docker.com/) (We tested with `Docker version 26.1.3, build 26.1.3-0ubuntu1~22.04.1`.)
 - Anthropic API key (for Claude models)
 - OpenAI API key (for OpenAI models)
+- OpenRouter API key (optional, for using models via OpenRouter)
 
 ### Setup
 
@@ -49,7 +51,20 @@ Since Anthropic's models are currently state-of-the-art on code, we used Claude 
 
    # For OpenAI models
    export OPENAI_API_KEY=your_openai_api_key_here
+
+   # For OpenRouter models (optional)
+   export OPENROUTER_API_KEY=your_openrouter_api_key_here
    ```
+
+4. Configure models (optional):
+
+   The system uses a configuration file at `config/model_config.yaml` to determine which models to use. You can edit this file to:
+
+   - Enable/disable different model providers
+   - Configure which models to use for specific purposes (agent, ensembler)
+   - Add or modify model configurations
+
+   By default, the system will use Claude 3.7 Sonnet for the agent and OpenAI o1 for the ensembler.
 
 ## Ways to use this repo
 
@@ -232,7 +247,102 @@ The agent's prompts are defined in the `prompts/` directory. You can customize t
 You can customize the Majority Vote Ensembler by modifying:
 
 - `prompts/ensembler_prompt.py`: Change the prompt template used for ensembling
-- Change the LLM model by modifying the `get_client` call in `process_problem` function
+- Change the LLM model by modifying the `purpose_models.ensembler` value in `config/model_config.yaml`
+
+### Model Configuration
+
+The system uses a YAML configuration file at `config/model_config.yaml` to manage model settings. This file allows you to:
+
+1. **Configure Model Providers**:
+   - Direct API access to Anthropic and OpenAI models
+   - OpenRouter access to various models (Claude, GPT, Llama, Mistral, etc.)
+
+2. **Set Purpose-Specific Models**:
+   - `agent`: The model used for the main agent
+   - `ensembler`: The model used for the majority vote ensembler
+
+3. **Enable/Disable Providers**:
+   - Set `enabled: true/false` for each provider section
+
+4. **Add Custom Models**:
+   - Add new models to any provider section
+
+#### Example Configuration
+
+```yaml
+# Default model settings
+default_model: "claude-3-7-sonnet"
+default_openrouter_model: "anthropic/claude-3-7-sonnet"
+
+# Model providers
+providers:
+  # Direct API providers
+  direct:
+    anthropic:
+      enabled: true
+      models:
+        - name: "claude-3-7-sonnet"
+          model_name: "claude-3-7-sonnet-20250219"
+          # Additional parameters...
+
+    openai:
+      enabled: true
+      models:
+        - name: "gpt-4o"
+          model_name: "gpt-4o-2024-05-13"
+          # Additional parameters...
+
+  # OpenRouter provider
+  openrouter:
+    enabled: true  # Set to true to enable OpenRouter
+    api_key_env: "OPENROUTER_API_KEY"
+    models:
+      - name: "claude-3-7-sonnet"
+        model_name: "anthropic/claude-3-7-sonnet"
+        description: "Claude 3.7 Sonnet via OpenRouter"
+        max_tokens: 16384
+      - name: "deepseek-chat"
+        model_name: "deepseek/deepseek-chat-v3-0324"
+        description: "DeepSeek Chat v3 via OpenRouter"
+        max_tokens: 8192
+      - name: "llama-3-70b"
+        model_name: "meta-llama/llama-3-70b-instruct"
+        description: "Llama 3 70B via OpenRouter"
+        max_tokens: 4096
+
+# Purpose-specific model assignments
+purpose_models:
+  agent: "deepseek-chat"  # Using DeepSeek Chat via OpenRouter
+  ensembler: "o1"  # Using OpenAI o1 directly
+```
+
+To use OpenRouter models, set `providers.openrouter.enabled` to `true` and ensure you have set the `OPENROUTER_API_KEY` environment variable.
+
+#### Using DeepSeek Chat via OpenRouter
+
+When Anthropic API credits are low, you can use the DeepSeek Chat model via OpenRouter as an alternative:
+
+1. Make sure you have an OpenRouter API key and set it in your environment:
+   ```bash
+   export OPENROUTER_API_KEY=your_openrouter_api_key_here
+   ```
+
+2. Update the `config/model_config.yaml` file to enable OpenRouter and set DeepSeek as the agent model:
+   ```yaml
+   providers:
+     openrouter:
+       enabled: true
+
+   purpose_models:
+     agent: "deepseek-chat"
+   ```
+
+3. Run the CLI as usual:
+   ```bash
+   python cli.py
+   ```
+
+The system will automatically use the DeepSeek Chat model via OpenRouter for the agent.
 
 ## Contributing
 

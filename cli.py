@@ -11,6 +11,7 @@ import argparse
 from pathlib import Path
 import sys
 import logging
+import yaml
 
 from rich.console import Console
 from rich.panel import Panel
@@ -19,7 +20,7 @@ from prompt_toolkit.history import InMemoryHistory
 
 from tools.agent import Agent
 from utils.workspace_manager import WorkspaceManager
-from utils.llm_client import get_client
+from utils.llm_client import get_client, load_model_config
 from prompts.instruction import INSTRUCTION_PROMPT
 
 MAX_OUTPUT_TOKENS_PER_TURN = 32768
@@ -86,14 +87,55 @@ def main():
     else:
         logger_for_agent_logs.propagate = False
 
-    # Check if ANTHROPIC_API_KEY is set
-    if "ANTHROPIC_API_KEY" not in os.environ:
-        print("Error: ANTHROPIC_API_KEY environment variable is not set.")
-        print("Please set it to your Anthropic API key.")
-        sys.exit(1)
-
     # Initialize console
     console = Console()
+
+    # Load model configuration
+    model_config = load_model_config()
+
+    # Determine which model to use
+    model_name = "purpose:agent"  # Default to purpose-specific model
+
+    # Check if we have required API keys based on configuration
+    if model_config:
+        # Get the model name for the agent purpose
+        if "purpose_models" in model_config and "agent" in model_config["purpose_models"]:
+            model_name = model_config["purpose_models"]["agent"]
+
+        # Check if OpenRouter is enabled and if we're using an OpenRouter model
+        openrouter_enabled = (
+            "providers" in model_config
+            and "openrouter" in model_config["providers"]
+            and model_config["providers"]["openrouter"]["enabled"]
+        )
+
+        # Check if the selected model is from OpenRouter
+        is_openrouter_model = False
+        if openrouter_enabled:
+            for model in model_config["providers"]["openrouter"]["models"]:
+                if model["name"] == model_name:
+                    is_openrouter_model = True
+                    break
+
+        # Check for required API keys
+        if is_openrouter_model:
+            api_key_env = model_config["providers"]["openrouter"].get("api_key_env", "OPENROUTER_API_KEY")
+            if api_key_env not in os.environ:
+                print(f"Error: {api_key_env} environment variable is not set.")
+                print(f"Please set it to your OpenRouter API key.")
+                sys.exit(1)
+        elif "ANTHROPIC_API_KEY" not in os.environ and "OPENAI_API_KEY" not in os.environ:
+            print("Error: Neither ANTHROPIC_API_KEY nor OPENAI_API_KEY environment variables are set.")
+            print("Please set at least one of them based on the models you want to use.")
+            sys.exit(1)
+    else:
+        # No config file, check for Anthropic API key (default behavior)
+        if "ANTHROPIC_API_KEY" not in os.environ:
+            print("Error: ANTHROPIC_API_KEY environment variable is not set.")
+            print("Please set it to your Anthropic API key.")
+            sys.exit(1)
+        # Fall back to direct Anthropic client
+        model_name = "anthropic-direct"
 
     # Print welcome message
     if not args.minimize_stdout_logs:
@@ -113,11 +155,7 @@ def main():
         )
 
     # Initialize LLM client
-    client = get_client(
-        "anthropic-direct",
-        model_name="claude-3-7-sonnet-20250219",
-        use_caching=True,
-    )
+    client = get_client(model_name, use_caching=True)
 
     # Initialize workspace manager
     workspace_path = Path(args.workspace).resolve()

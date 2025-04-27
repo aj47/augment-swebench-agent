@@ -1,0 +1,75 @@
+# Model Configuration for SWE-bench Agent
+# This file defines the available models and their configurations
+
+# Default model settings
+default_model: "claude-3-7-sonnet"
+default_openrouter_model: "anthropic/claude-3-7-sonnet"
+
+# Model providers
+providers:
+  # Direct API providers
+  direct:
+    anthropic:
+      enabled: true
+      models:
+        - name: "claude-3-7-sonnet"
+          model_name: "claude-3-7-sonnet-20250219"
+          description: "Claude 3.7 Sonnet via direct Anthropic API"
+          max_tokens: 16384
+          thinking_tokens: 0
+          use_caching: true
+        - name: "claude-3-5-sonnet"
+          model_name: "claude-3-5-sonnet-20240620"
+          description: "Claude 3.5 Sonnet via direct Anthropic API"
+          max_tokens: 16384
+          thinking_tokens: 0
+          use_caching: true
+
+    openai:
+      enabled: true
+      models:
+        - name: "gpt-4o"
+          model_name: "gpt-4o-2024-05-13"
+          description: "GPT-4o via direct OpenAI API"
+          max_tokens: 16384
+          cot_model: true
+        - name: "o1"
+          model_name: "o1-2024-12-17"
+          description: "OpenAI o1 via direct OpenAI API"
+          max_tokens: 16384
+          cot_model: true
+
+  # OpenRouter provider
+  openrouter:
+    enabled: true  # Set to true to enable OpenRouter
+    api_key_env: "OPENROUTER_API_KEY"  # Environment variable for API key
+    models:
+      - name: "claude-3-7-sonnet"
+        model_name: "anthropic/claude-3-7-sonnet"
+        description: "Claude 3.7 Sonnet via OpenRouter"
+        max_tokens: 16384
+      - name: "claude-3-opus"
+        model_name: "anthropic/claude-3-opus"
+        description: "Claude 3 Opus via OpenRouter"
+        max_tokens: 16384
+      - name: "gpt-4o"
+        model_name: "openai/gpt-4o"
+        description: "GPT-4o via OpenRouter"
+        max_tokens: 16384
+      - name: "llama-3-70b"
+        model_name: "meta-llama/llama-3-70b-instruct"
+        description: "Llama 3 70B via OpenRouter"
+        max_tokens: 4096
+      - name: "mistral-large"
+        model_name: "mistralai/mistral-large"
+        description: "Mistral Large via OpenRouter"
+        max_tokens: 8192
+      - name: "deepseek-chat"
+        model_name: "deepseek/deepseek-chat-v3-0324"
+        description: "DeepSeek Chat v3 via OpenRouter"
+        max_tokens: 8192
+
+# Purpose-specific model assignments
+purpose_models:
+  agent: "deepseek-chat"  # Model for main agent (using DeepSeek via OpenRouter)
+  ensembler: "o1"  # Model for ensembler (using direct OpenAI API)

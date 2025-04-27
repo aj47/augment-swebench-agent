@@ -15,6 +15,7 @@ dependencies = [
     "docker==7.1.0",
     "docker-pycreds==0.4.0",
     "jsonschema>=4.23.0",
+    "litellm>=1.67.4",
     "numpy>=2.2.4",
     "openai==1.59.*",
     "pexpect>=4.9.0",

@@ -1,14 +1,23 @@
-"""LLM client for Anthropic models."""
+"""LLM client for various model providers including Anthropic, OpenAI, and OpenRouter."""
 
 import json
 import os
 import random
 import time
+import yaml
 from dataclasses import dataclass
-from typing import Any, Tuple, cast
+from pathlib import Path
+from typing import Any, Dict, List, Optional, Tuple, cast
 from dataclasses_json import DataClassJsonMixin
 import anthropic
 import openai
+
+# Try to import litellm, but don't fail if it's not available
+try:
+    import litellm
+    LITELLM_AVAILABLE = True
+except ImportError:
+    LITELLM_AVAILABLE = False
 from anthropic import (
     NOT_GIVEN as Anthropic_NOT_GIVEN,
 )
@@ -594,11 +603,364 @@ class OpenAIDirectClient(LLMClient):
         return augment_messages, message_metadata
 
 
+class OpenRouterClient(LLMClient):
+    """Use models via OpenRouter directly using the OpenAI client."""
+
+    def __init__(
+        self,
+        model_name: str,
+        max_retries: int = 2,
+        api_key: Optional[str] = None,
+        api_base: Optional[str] = "https://openrouter.ai/api/v1",
+    ):
+        """Initialize the OpenRouter client.
+
+        Args:
+            model_name: The model name to use.
+            max_retries: The maximum number of retries.
+            api_key: The API key to use. If None, will be read from environment.
+            api_base: The API base URL. If None, will use the default.
+        """
+        # Set up API key from environment if not provided
+        api_key = api_key or os.getenv("OPENROUTER_API_KEY")
+        if not api_key:
+            raise ValueError("OPENROUTER_API_KEY environment variable not set")
+
+        # Initialize OpenAI client with OpenRouter base URL
+        self.client = openai.OpenAI(
+            api_key=api_key,
+            base_url=api_base,
+            max_retries=1,
+        )
+
+        # Store the model name
+        self.model_name = model_name
+        self.max_retries = max_retries
+
+    def generate(
+        self,
+        messages: LLMMessages,
+        max_tokens: int,
+        system_prompt: str | None = None,
+        temperature: float = 0.0,
+        tools: list[ToolParam] = [],
+        tool_choice: dict[str, str] | None = None,
+        thinking_tokens: int | None = None,
+    ) -> Tuple[list[AssistantContentBlock], dict[str, Any]]:
+        """Generate responses using OpenRouter.
+
+        Args:
+            messages: A list of messages.
+            max_tokens: The maximum number of tokens to generate.
+            system_prompt: A system prompt.
+            temperature: The temperature.
+            tools: A list of tools.
+            tool_choice: A tool choice.
+            thinking_tokens: Number of tokens for thinking (not used).
+
+        Returns:
+            A generated response.
+        """
+        assert thinking_tokens is None, "Not implemented for OpenRouter"
+
+        # Convert messages to OpenAI format
+        openai_messages = []
+        if system_prompt is not None:
+            openai_messages.append({"role": "system", "content": system_prompt})
+
+        for idx, message_list in enumerate(messages):
+            role = "user" if idx % 2 == 0 else "assistant"
+
+            # Handle multiple content blocks in a message
+            if len(message_list) == 1:
+                # Simple case: single content block
+                message = message_list[0]
+
+                if str(type(message)) == str(TextPrompt):
+                    message = cast(TextPrompt, message)
+                    openai_messages.append({"role": role, "content": message.text})
+                elif str(type(message)) == str(TextResult):
+                    message = cast(TextResult, message)
+                    openai_messages.append({"role": role, "content": message.text})
+                elif str(type(message)) == str(ToolCall):
+                    message = cast(ToolCall, message)
+                    tool_call = {
+                        "id": message.tool_call_id,
+                        "type": "function",
+                        "function": {
+                            "name": message.tool_name,
+                            "arguments": json.dumps(message.tool_input),
+                        },
+                    }
+                    openai_messages.append({"role": role, "tool_calls": [tool_call]})
+                elif str(type(message)) == str(ToolFormattedResult):
+                    message = cast(ToolFormattedResult, message)
+                    openai_messages.append({
+                        "role": "tool",
+                        "tool_call_id": message.tool_call_id,
+                        "content": message.tool_output,
+                    })
+                else:
+                    raise ValueError(f"Unknown message type: {type(message)}")
+            else:
+                # Complex case: multiple content blocks
+                # For now, concatenate text blocks and ignore tool calls
+                content = ""
+                for message in message_list:
+                    if str(type(message)) == str(TextPrompt) or str(type(message)) == str(TextResult):
+                        if str(type(message)) == str(TextPrompt):
+                            message = cast(TextPrompt, message)
+                        else:
+                            message = cast(TextResult, message)
+                        content += message.text + "\n"
+
+                if content:
+                    openai_messages.append({"role": role, "content": content.strip()})
+
+        # Convert tools to OpenAI format
+        openai_tools = []
+        if tools:
+            for tool in tools:
+                tool_def = {
+                    "type": "function",
+                    "function": {
+                        "name": tool.name,
+                        "description": tool.description,
+                        "parameters": tool.input_schema,
+                    }
+                }
+                openai_tools.append(tool_def)
+
+        # Convert tool_choice to OpenAI format
+        openai_tool_choice = None
+        if tool_choice:
+            if tool_choice["type"] == "any":
+                openai_tool_choice = "required"
+            elif tool_choice["type"] == "auto":
+                openai_tool_choice = "auto"
+            elif tool_choice["type"] == "tool":
+                openai_tool_choice = {
+                    "type": "function",
+                    "function": {"name": tool_choice["name"]},
+                }
+
+        # Make the API call with retries
+        response = None
+        for retry in range(self.max_retries):
+            try:
+                # Add OpenRouter specific headers
+                extra_headers = {
+                    "HTTP-Referer": "https://augment.dev",  # Optional
+                    "X-Title": "Augment SWE-bench Agent",   # Optional
+                }
+
+                response = self.client.chat.completions.create(
+                    model=self.model_name,
+                    messages=openai_messages,
+                    max_tokens=max_tokens,
+                    temperature=temperature,
+                    tools=openai_tools if openai_tools else None,
+                    tool_choice=openai_tool_choice,
+                    extra_headers=extra_headers,
+                )
+                break
+            except Exception as e:
+                if retry == self.max_retries - 1:
+                    print(f"Failed OpenRouter request after {retry + 1} retries")
+                    raise e
+                else:
+                    print(f"Retrying OpenRouter request: {retry + 1}/{self.max_retries}")
+                    # Sleep with jitter to avoid thundering herd
+                    time.sleep(5 * random.uniform(0.8, 1.2))
+
+        # Convert response back to Augment format
+        augment_messages = []
+        assert response is not None
+
+        # Extract the message content
+        message = response.choices[0].message
+
+        # Handle tool calls
+        if hasattr(message, 'tool_calls') and message.tool_calls:
+            for tool_call in message.tool_calls:
+                try:
+                    # Parse the JSON string into a dictionary
+                    tool_input = json.loads(tool_call.function.arguments)
+                except json.JSONDecodeError as e:
+                    print(f"Failed to parse tool arguments: {tool_call.function.arguments}")
+                    raise ValueError(f"Invalid JSON in tool arguments: {str(e)}") from e
+
+                augment_messages.append(
+                    ToolCall(
+                        tool_name=tool_call.function.name,
+                        tool_input=tool_input,
+                        tool_call_id=tool_call.id,
+                    )
+                )
+        # Handle text content
+        elif message.content:
+            augment_messages.append(TextResult(text=message.content))
+        else:
+            raise ValueError(f"Unknown message format: {message}")
+
+        # Prepare metadata
+        message_metadata = {
+            "raw_response": response,
+            "input_tokens": response.usage.prompt_tokens,
+            "output_tokens": response.usage.completion_tokens,
+        }
+
+        return augment_messages, message_metadata
+
+
+def load_model_config():
+    """Load model configuration from the config file."""
+    config_path = Path(__file__).parent.parent / "config" / "model_config.yaml"
+    if not config_path.exists():
+        return None
+
+    with open(config_path, "r") as f:
+        return yaml.safe_load(f)
+
+
 def get_client(client_name: str, **kwargs) -> LLMClient:
-    """Get a client for a given client name."""
+    """Get a client for a given client name.
+
+    Args:
+        client_name: The client name to use. Can be one of:
+            - "anthropic-direct": Use Anthropic models directly
+            - "openai-direct": Use OpenAI models directly
+            - "litellm": Use LiteLLM for any provider
+            - "openrouter": Use OpenRouter via LiteLLM (shorthand for litellm with provider=openrouter)
+            - A model name from the config file
+        **kwargs: Additional arguments to pass to the client.
+
+    Returns:
+        An LLM client instance.
+    """
+    # Load model configuration
+    model_config = load_model_config()
+
+    # Handle direct client requests
     if client_name == "anthropic-direct":
         return AnthropicDirectClient(**kwargs)
     elif client_name == "openai-direct":
         return OpenAIDirectClient(**kwargs)
-    else:
-        raise ValueError(f"Unknown client name: {client_name}")
+    elif client_name == "openrouter":
+        try:
+            # Extract only the parameters that OpenRouterClient accepts
+            valid_params = {
+                'model_name': kwargs.get('model_name', 'deepseek/deepseek-chat-v3-0324'),
+                'max_retries': kwargs.get('max_retries', 2),
+            }
+
+            # Add any remaining kwargs that don't conflict
+            for k, v in kwargs.items():
+                if k not in ['max_tokens', 'thinking_tokens', 'use_caching'] and k not in valid_params:
+                    valid_params[k] = v
+
+            return OpenRouterClient(**valid_params)
+        except Exception as e:
+            print(f"Warning: Failed to initialize OpenRouter client: {str(e)}. Falling back to Anthropic direct client.")
+            return AnthropicDirectClient(**kwargs)
+
+    # Check if we have a model config and try to find the model
+    if model_config:
+        # Check if this is a purpose-specific model request
+        if client_name.startswith("purpose:"):
+            purpose = client_name.split(":", 1)[1]
+            if "purpose_models" in model_config and purpose in model_config["purpose_models"]:
+                model_name = model_config["purpose_models"][purpose]
+                return get_client(model_name, **kwargs)
+
+        # Check direct providers
+        if "providers" in model_config and "direct" in model_config["providers"]:
+            # Check Anthropic models
+            if "anthropic" in model_config["providers"]["direct"] and model_config["providers"]["direct"]["anthropic"]["enabled"]:
+                for model in model_config["providers"]["direct"]["anthropic"]["models"]:
+                    if model["name"] == client_name:
+                        # Extract parameters that might be duplicated
+                        use_caching = kwargs.pop('use_caching', True) if 'use_caching' in kwargs else True
+                        model_params = {k: v for k, v in model.items() if k not in ["name", "model_name", "description"]}
+
+                        # Remove parameters that AnthropicDirectClient doesn't accept
+                        for param in ['max_tokens', 'use_caching']:
+                            if param in model_params:
+                                model_params.pop(param)
+
+                        # Only pass parameters that AnthropicDirectClient accepts
+                        valid_params = {
+                            'model_name': model["model_name"],
+                            'max_retries': model_params.get('max_retries', 2),
+                            'use_caching': use_caching,
+                            'thinking_tokens': model_params.get('thinking_tokens', 0)
+                        }
+
+                        # Add any remaining kwargs that don't conflict
+                        for k, v in kwargs.items():
+                            if k not in valid_params:
+                                valid_params[k] = v
+
+                        return AnthropicDirectClient(**valid_params)
+
+            # Check OpenAI models
+            if "openai" in model_config["providers"]["direct"] and model_config["providers"]["direct"]["openai"]["enabled"]:
+                for model in model_config["providers"]["direct"]["openai"]["models"]:
+                    if model["name"] == client_name:
+                        # Extract parameters that might be duplicated
+                        model_params = {k: v for k, v in model.items() if k not in ["name", "model_name", "description"]}
+
+                        # Handle potential duplicate parameters
+                        for param in ['cot_model']:
+                            if param in model_params and param in kwargs:
+                                model_params.pop(param)
+
+                        return OpenAIDirectClient(
+                            model_name=model["model_name"],
+                            **model_params,
+                            **kwargs
+                        )
+
+        # Check OpenRouter models
+        if "providers" in model_config and "openrouter" in model_config["providers"] and model_config["providers"]["openrouter"]["enabled"]:
+            for model in model_config["providers"]["openrouter"]["models"]:
+                if model["name"] == client_name:
+                    try:
+                        # Extract only the parameters that OpenRouterClient accepts
+                        valid_params = {
+                            'model_name': model["model_name"],
+                            'max_retries': kwargs.get('max_retries', 2),
+                        }
+
+                        # Add any remaining kwargs that don't conflict
+                        for k, v in kwargs.items():
+                            if k not in ['max_tokens', 'thinking_tokens', 'use_caching'] and k not in valid_params:
+                                valid_params[k] = v
+
+                        return OpenRouterClient(**valid_params)
+                    except Exception as e:
+                        print(f"Warning: Failed to initialize OpenRouter client for model '{client_name}': {str(e)}.")
+                        print(f"Falling back to Anthropic direct client.")
+                        return AnthropicDirectClient(**kwargs)
+
+    # If we get here, we couldn't find the client
+    print(f"Warning: Unknown client name: {client_name}. Falling back to Anthropic direct client.")
+
+    # Extract parameters that AnthropicDirectClient accepts
+    use_caching = kwargs.pop('use_caching', True) if 'use_caching' in kwargs else True
+
+    # Only pass parameters that AnthropicDirectClient accepts
+    valid_params = {
+        'use_caching': use_caching,
+    }
+
+    # Add model_name if provided
+    if 'model_name' in kwargs:
+        valid_params['model_name'] = kwargs.pop('model_name')
+
+    # Add any remaining kwargs that don't conflict with AnthropicDirectClient parameters
+    for k, v in kwargs.items():
+        if k not in ['max_tokens']:  # Skip parameters that AnthropicDirectClient doesn't accept
+            valid_params[k] = v
+
+    return AnthropicDirectClient(**valid_params)

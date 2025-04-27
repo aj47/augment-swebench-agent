@@ -19,7 +19,7 @@ from typing import Dict, List, Any, Optional
 from tqdm import tqdm
 
 from prompts.ensembler_prompt import build_ensembler_prompt
-from utils.llm_client import get_client, TextPrompt
+from utils.llm_client import get_client, TextPrompt, load_model_config
 
 MAX_TOKENS = 16384
 TEMPERATURE = 0.0
@@ -82,8 +82,17 @@ def process_problem(
     Returns:
         A dictionary containing the result for the problem
     """
-    # Create a client for this thread
-    client = get_client("openai-direct", model_name="o1-2024-12-17", cot_model=True)
+    # Load model configuration
+    model_config = load_model_config()
+
+    # Determine which model to use for ensembler
+    if model_config and "purpose_models" in model_config and "ensembler" in model_config["purpose_models"]:
+        # Use the purpose-specific model from config
+        model_name = model_config["purpose_models"]["ensembler"]
+        client = get_client(model_name)
+    else:
+        # Fall back to default OpenAI model
+        client = get_client("openai-direct", model_name="o1-2024-12-17", cot_model=True)
 
     print(
         f"Processing problem {problem_index + 1}/{total_problems}: {problem.get('id', f'Problem {problem_index + 1}')}"
@@ -202,9 +211,47 @@ def main():
     """Main function."""
     args = parse_args()
 
-    if not os.environ.get("OPENAI_API_KEY"):
-        print("Error: OPENAI_API_KEY environment variable is not set")
-        sys.exit(1)
+    # Load model configuration
+    model_config = load_model_config()
+
+    # Check for required API keys based on configuration
+    if model_config and "purpose_models" in model_config and "ensembler" in model_config["purpose_models"]:
+        model_name = model_config["purpose_models"]["ensembler"]
+
+        # Check if this is an OpenRouter model
+        is_openrouter_model = False
+        if "providers" in model_config and "openrouter" in model_config["providers"] and model_config["providers"]["openrouter"]["enabled"]:
+            for model in model_config["providers"]["openrouter"]["models"]:
+                if model["name"] == model_name:
+                    is_openrouter_model = True
+                    api_key_env = model_config["providers"]["openrouter"].get("api_key_env", "OPENROUTER_API_KEY")
+                    if not os.environ.get(api_key_env):
+                        print(f"Error: {api_key_env} environment variable is not set")
+                        sys.exit(1)
+                    break
+
+        # If not OpenRouter, check for appropriate API key
+        if not is_openrouter_model:
+            # Check if it's an OpenAI model
+            is_openai_model = False
+            if "providers" in model_config and "direct" in model_config["providers"] and "openai" in model_config["providers"]["direct"]:
+                for model in model_config["providers"]["direct"]["openai"]["models"]:
+                    if model["name"] == model_name:
+                        is_openai_model = True
+                        if not os.environ.get("OPENAI_API_KEY"):
+                            print("Error: OPENAI_API_KEY environment variable is not set")
+                            sys.exit(1)
+                        break
+
+            # If not OpenAI, assume it's Anthropic
+            if not is_openai_model and not os.environ.get("ANTHROPIC_API_KEY"):
+                print("Error: ANTHROPIC_API_KEY environment variable is not set")
+                sys.exit(1)
+    else:
+        # No config or no ensembler model specified, check for OpenAI API key (default)
+        if not os.environ.get("OPENAI_API_KEY"):
+            print("Error: OPENAI_API_KEY environment variable is not set")
+            sys.exit(1)
 
     # Load problems from JSON file
     problems = load_problems(args.input_jsonl_path)
