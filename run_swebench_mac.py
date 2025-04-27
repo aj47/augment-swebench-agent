@@ -6,7 +6,6 @@ This script loads a SWE-bench problem, starts a Docker container for it,
 and runs the agent inside the container by calling cli.py.
 """
 
-from functools import partial
 import os
 import logging
 import threading
@@ -14,17 +13,16 @@ import sys
 import json
 import argparse
 from pathlib import Path
-from multiprocessing import Pool, Manager
+from multiprocessing import Manager
 import time
 import numpy as np
 import platform
 
 from rich.console import Console
-from rich.panel import Panel
 from datasets import load_dataset
 
 # Use the macOS-specific Docker utilities
-from utils.docker_utils_mac import MAX_DOCKER_CONCURRENCY, setup_workspace, stop_container
+from utils.docker_cli_utils import MAX_DOCKER_CONCURRENCY, setup_workspace, stop_container
 from utils.common import generate_patch
 from cli import main as cli_main
 import uuid
@@ -213,7 +211,7 @@ def main():
         default=None,
         help="Custom workspace directory (default: /tmp/workspace/UUID)",
     )
-    
+
     args = parser.parse_args()
 
     # Initialize console
@@ -266,17 +264,17 @@ def main():
             with Manager() as manager:
                 lock = manager.Lock()
                 semaphore = manager.Semaphore(MAX_DOCKER_CONCURRENCY)
-                
+
                 # For simplicity, we'll run sequentially instead of using a pool
                 diffs = []
                 agent_durations = []
                 eval_outcomes_list = []
-                
+
                 for rollout_idx in range(args.num_candidate_solutions):
                     console.print(f"Running solution attempt {rollout_idx + 1}/{args.num_candidate_solutions}")
                     diff, agent_duration, eval_outcomes = run_agent_on_single_problem(
-                        problem_id, 
-                        problem_statement, 
+                        problem_id,
+                        problem_statement,
                         rollout_idx,
                         workspace_base_path,
                         lock,
@@ -285,7 +283,7 @@ def main():
                     diffs.append(diff)
                     agent_durations.append(agent_duration)
                     eval_outcomes_list.append(eval_outcomes)
-                
+
                 median_duration = np.median(agent_durations)
                 diff_data = {
                     "id": problem_id,
@@ -305,16 +303,16 @@ def main():
             logger.exception(f"Error processing example {problem_id}")
 
     console.print(f"\nAll examples processed. Results saved to {output_path}")
-    
+
     # Create a markdown summary file for each problem
     for diff_data in all_diff_data:
         problem_id = diff_data["id"]
         problem_statement = diff_data["instruction"]
         eval_outcomes = diff_data["eval_outcomes"]
-        
+
         # Check if any solution was successful
         success = any(outcome.get("is_success", False) for outcome in eval_outcomes)
-        
+
         with open(f"swebench_{problem_id}_results.md", "w") as f:
             f.write(f"# SWEBench Problem: {problem_id}\n\n")
             f.write("## Problem Statement\n\n")
@@ -329,13 +327,13 @@ def main():
                 f.write("The execution was successful! At least one solution passed the evaluation.\n\n")
             else:
                 f.write("None of the solutions passed the evaluation.\n\n")
-            
+
             f.write("## Solution Details\n\n")
             for i, (diff, duration, outcome) in enumerate(zip(diff_data["diffs"], diff_data["agent_durations"], eval_outcomes)):
                 f.write(f"### Solution Attempt {i+1}\n\n")
                 f.write(f"- Duration: {duration:.2f} seconds\n")
                 f.write(f"- Success: {outcome.get('is_success', False)}\n\n")
-                
+
                 if diff:
                     f.write("#### Diff\n\n")
                     f.write("```diff\n")
@@ -343,10 +341,10 @@ def main():
                     f.write("\n```\n\n")
                 else:
                     f.write("No diff was generated for this solution attempt.\n\n")
-            
+
             f.write("## Workspace Location\n\n")
             f.write(f"The workspace for this problem is located at: `{workspace_base_path / problem_id}`\n\n")
-            
+
     console.print("Done!")
     console.print(f"Detailed results for each problem have been saved as swebench_<problem_id>_results.md")
 

@@ -20,9 +20,32 @@ Before running SWEBench, ensure you have:
    ```
 4. Docker Desktop installed and running on your Mac
 
-## Using the macOS-specific Script
+## Using the macOS-specific Scripts
 
-We've created a macOS-specific script that handles the Docker socket location correctly:
+We've created two macOS-specific scripts to help you work with SWEBench:
+
+### Option 1: Simplified Setup Script (Recommended)
+
+This script sets up the Docker container and workspace for a SWEBench problem without running the agent:
+
+```bash
+python run_swebench_simple.py --problem-ids "problem_id1" "problem_id2"
+```
+
+For example:
+```bash
+python run_swebench_simple.py --problem-ids "django__django-10097"
+```
+
+This script:
+1. Pulls the Docker image for the problem
+2. Creates a Docker container with the problem environment
+3. Sets up a workspace directory with a symlink to the Docker volume
+4. Leaves the container running so you can work with it directly
+
+### Option 2: Full Agent Runner
+
+This script runs the full agent on a SWEBench problem:
 
 ```bash
 python run_swebench_mac.py --problem-ids "problem_id1" "problem_id2" --num-candidate-solutions 1
@@ -34,6 +57,13 @@ python run_swebench_mac.py --problem-ids "django__django-10097" --num-candidate-
 ```
 
 ### Command-line Options
+
+#### For run_swebench_simple.py
+
+- `--problem-ids`: One or more problem IDs to run (required)
+- `--workspace`: Custom workspace directory (default: /tmp/swebench_workspace/UUID)
+
+#### For run_swebench_mac.py
 
 - `--problem-ids`: One or more problem IDs to run (required)
 - `--num-candidate-solutions`: Number of solution attempts to generate for each problem (default: 1)

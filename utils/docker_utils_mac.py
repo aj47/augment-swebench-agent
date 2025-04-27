@@ -10,18 +10,38 @@ from typing import Any, Dict, Tuple
 AUGMENT_ROOT = Path(__file__).parent.parent
 MAX_DOCKER_CONCURRENCY = 4
 
-# Mac-specific Docker socket path
-MAC_DOCKER_SOCKET = os.path.expanduser('~/Library/Containers/com.docker.docker/Data/docker-cli.sock')
+# Docker socket paths to try
+DOCKER_SOCKET_PATHS = [
+    '/var/run/docker.sock',  # Standard path
+    os.path.expanduser('~/Library/Containers/com.docker.docker/Data/docker-cli.sock'),  # macOS-specific path
+    os.path.expanduser('~/Library/Containers/com.docker.docker/Data/docker.sock'),  # Alternative macOS path
+]
 
 
 def get_docker_client():
     """Get a Docker client that works on macOS."""
-    if os.path.exists(MAC_DOCKER_SOCKET):
-        # Use the macOS-specific socket path
-        return docker.DockerClient(base_url=f"unix://{MAC_DOCKER_SOCKET}")
-    else:
-        # Fall back to default
+    # Try each socket path in order
+    for socket_path in DOCKER_SOCKET_PATHS:
+        if os.path.exists(socket_path):
+            logging.info(f"Found Docker socket at {socket_path}")
+            try:
+                client = docker.DockerClient(base_url=f"unix://{socket_path}")
+                # Test the connection
+                client.ping()
+                logging.info(f"Successfully connected to Docker using {socket_path}")
+                return client
+            except Exception as e:
+                logging.warning(f"Failed to connect to Docker using {socket_path}: {e}")
+                continue
+
+    # If we get here, none of the socket paths worked
+    logging.info("Falling back to default Docker client")
+    try:
+        # Try the default connection method as a last resort
         return docker.from_env()
+    except Exception as e:
+        logging.error(f"Failed to connect to Docker using default method: {e}")
+        raise Exception(f"Could not connect to Docker. Please ensure Docker is running. Error: {e}")
 
 
 def get_issue_image_name(problem_id: str, workspace: Path) -> str:
