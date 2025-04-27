@@ -198,6 +198,13 @@ def main():
         default=8,
         help="Number of candidate solutions to generate for each example",
     )
+    parser.add_argument(
+        "--problem-ids",
+        type=str,
+        nargs="+",
+        default=None,
+        help="Specific problem IDs to run on (overrides --num-examples if provided)",
+    )
 
     args = parser.parse_args()
 
@@ -222,21 +229,38 @@ def main():
         "test"
     ].to_pandas()  # pyright: ignore
 
-    # Sharding
-    num_examples_per_shard = len(swebench_dataset) // args.shard_ct  # pyright: ignore[reportArgumentType]
-    examples = swebench_dataset.iloc[  # pyright: ignore[reportAttributeAccessIssue]
-        args.shard_id * num_examples_per_shard : (args.shard_id + 1)
-        * num_examples_per_shard
-    ]
+    # If specific problem IDs are provided, filter the dataset
+    if args.problem_ids:
+        console.print(f"Filtering dataset for specific problem IDs: {args.problem_ids}")
+        examples = swebench_dataset[swebench_dataset["instance_id"].isin(args.problem_ids)]  # pyright: ignore[reportAttributeAccessIssue]
+        if len(examples) == 0:
+            console.print("[bold red]Error: None of the specified problem IDs were found in the dataset.[/bold red]")
+            sys.exit(1)
+        elif len(examples) < len(args.problem_ids):
+            found_ids = set(examples["instance_id"].tolist())
+            missing_ids = set(args.problem_ids) - found_ids
+            console.print(f"[bold yellow]Warning: Some problem IDs were not found in the dataset: {missing_ids}[/bold yellow]")
+        num_examples = len(examples)
+        console.print(f"Running on {num_examples} specific problems selected by ID.")
+    else:
+        # Sharding
+        num_examples_per_shard = len(swebench_dataset) // args.shard_ct  # pyright: ignore[reportArgumentType]
+        examples = swebench_dataset.iloc[  # pyright: ignore[reportAttributeAccessIssue]
+            args.shard_id * num_examples_per_shard : (args.shard_id + 1)
+            * num_examples_per_shard
+        ]
 
-    # Get the number of examples to run
-    assert args.num_examples is None or args.num_examples <= len(examples), (
-        f"num_examples ({args.num_examples}) is greater than the number of examples in the shard ({len(examples)}). Either decrease num_examples or decrease the number of shards."
-    )
-    num_examples = args.num_examples if args.num_examples is not None else len(examples)
-    console.print(
-        f"Running on {num_examples} examples from shard {args.shard_id} out of {args.shard_ct} shards."
-    )
+        # Get the number of examples to run
+        assert args.num_examples is None or args.num_examples <= len(examples), (
+            f"num_examples ({args.num_examples}) is greater than the number of examples in the shard ({len(examples)}). Either decrease num_examples or decrease the number of shards."
+        )
+        num_examples = args.num_examples if args.num_examples is not None else len(examples)
+        console.print(
+            f"Running on {num_examples} examples from shard {args.shard_id} out of {args.shard_ct} shards."
+        )
+        # Limit examples to the specified number
+        examples = examples.iloc[:num_examples]
+
     console.print(
         f"We will generate {args.num_candidate_solutions} candidate solutions for each example with parallelism of {args.num_processes}."
     )
@@ -244,7 +268,7 @@ def main():
     # print out all example ids we'll be processing
     console.print(
         "Selected examples:",
-        "\n - " + "\n - ".join(examples.iloc[:num_examples]["instance_id"].tolist()),
+        "\n - " + "\n - ".join(examples["instance_id"].tolist()),
     )
 
     # List to store all diff data
@@ -256,14 +280,13 @@ def main():
 
     output_path = f"pre-ensemble_results_shard{args.shard_id}_of_{args.shard_ct}.jsonl"
 
-    # Iterate over the specified number of examples
-    for i in range(num_examples):
+    # Iterate over the examples
+    for i, problem in enumerate(examples.itertuples()):
         try:
-            problem = examples.iloc[i]
-            problem_id = problem["instance_id"]
-            problem_statement = problem["problem_statement"]
+            problem_id = problem.instance_id
+            problem_statement = problem.problem_statement
 
-            console.print(f"\nProcessing example {i + 1}/{num_examples}")
+            console.print(f"\nProcessing example {i + 1}/{len(examples)}")
 
             # Run the agent on the selected problem
             with Manager() as manager:
@@ -299,7 +322,7 @@ def main():
                     for diff_data in all_diff_data:
                         f.write(json.dumps(diff_data) + "\n")
 
-                console.print(f"Completed example {i + 1}/{num_examples}")
+                console.print(f"Completed example {i + 1}/{len(examples)}")
         except Exception as e:
             console.print(f"Error processing example {i + 1}: {str(e)}")
             continue
@@ -318,7 +341,7 @@ def main():
 
     ensemble_instruction = Panel(
         f"""
-Now you have generated rollouts ({args.num_candidate_solutions} per problem) for {num_examples} problems and collected eval results for each rollout.
+Now you have generated rollouts ({args.num_candidate_solutions} per problem) for {len(examples)} problems{" selected by ID" if args.problem_ids else ""} and collected eval results for each rollout.
 
 You can manually analyze results by looking into the workspace directory: {workspace_base_path}. You'll be interested to look at files like:
 - agent_logs.txt: The logs from the agent

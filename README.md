@@ -125,9 +125,29 @@ python run_agent_on_swebench_problem.py --num-examples 5 --num-candidate-solutio
 
 You can increase `--num-examples` and `--num-candidate-solutions` to run on more problems and generate more candidate solutions. But be aware that this will take longer and cost more money.
 
+To run on specific problems by their IDs:
+```bash
+python run_agent_on_swebench_problem.py --problem-ids "django-django-10006" "django-django-10007" --num-candidate-solutions 2
+```
+
+This will run only on the specified problem IDs, generating 2 candidate solutions for each.
+
+To list available problem IDs for selection, use the included utility script:
+```bash
+# List all problem IDs
+python list_swebench_problems.py
+
+# Search for problems containing a keyword
+python list_swebench_problems.py --search "authentication"
+
+# Show detailed problem statements
+python list_swebench_problems.py --details --limit 5
+```
+
 ### Command-line Options
 
 - `--num-examples`: Number of examples to run on (default: None, which runs on all examples)
+- `--problem-ids`: Specific problem IDs to run on (overrides --num-examples if provided)
 - `--shard-ct`: Number of shards to split the work into (default: 1)
 - `--shard-id`: Shard ID to run (0-indexed, default: 0)
 - `--num-processes`: Number of processes to use for each example (default: 8)
