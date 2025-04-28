@@ -6,6 +6,35 @@ This guide explains how to run SWEBench problems on macOS using the modified scr
 
 SWEBench uses Docker to create isolated environments for each problem. On macOS, Docker Desktop uses a different socket location than on Linux, which can cause connection issues with the standard SWEBench scripts.
 
+## Recent Improvements
+
+We've made several significant improvements to the Docker integration to make it more robust:
+
+1. **Enhanced Docker Command Execution**
+   - Added retry mechanisms for Docker commands
+   - Implemented timeout handling to prevent hanging
+   - Added better error reporting and recovery
+
+2. **Improved Container Lifecycle Management**
+   - Added container state verification after creation
+   - Implemented automatic restart of containers when needed
+   - Enhanced permission setting with fallback mechanisms
+
+3. **More Robust Volume Path Handling**
+   - Added multiple fallback methods for finding volume paths
+   - Improved symlink creation with better error handling
+   - Added verification steps for volume access
+
+4. **Enhanced Diff Generation**
+   - Implemented multiple strategies for generating diffs
+   - Added fallback mechanisms when primary methods fail
+   - Improved error handling and reporting
+
+5. **More Robust Evaluation Process**
+   - Added retry mechanisms for evaluation
+   - Implemented validation of prediction files
+   - Added fallback evaluation methods
+
 ## Prerequisites
 
 Before running SWEBench, ensure you have:
@@ -112,3 +141,48 @@ If you encounter issues:
 2. Verify that the Docker socket exists at `~/Library/Containers/com.docker.docker/Data/docker-cli.sock`
 3. Check the `swebench_run.log` file for detailed error messages
 4. Try running with a single problem and a single solution attempt first
+
+### Common Docker Issues and Solutions
+
+#### Container Not Running After Creation
+
+If you see messages like "Container is not running after creation":
+
+```bash
+# Check the container status
+docker ps -a | grep sweb.augment
+
+# Try to start the container manually
+docker start <container_id>
+```
+
+#### Docker Socket Connection Issues
+
+If you see "Error while fetching server API version" during evaluation:
+
+1. Restart Docker Desktop
+2. Check Docker Desktop settings for any resource limitations
+3. Verify Docker socket permissions:
+   ```bash
+   ls -la ~/Library/Containers/com.docker.docker/Data/docker-cli.sock
+   ```
+
+#### Volume Path Access Problems
+
+If you see "Failed to set permissions" or "Repository path does not exist":
+
+1. The script now includes multiple fallback methods for finding volume paths
+2. You can manually check the Docker volume:
+   ```bash
+   docker inspect <container_id> --format='{{.Mounts}}'
+   ```
+
+#### Diff Generation Failures
+
+If you see "All diff generation methods failed":
+
+1. The script now tries multiple methods to generate diffs
+2. You can manually generate a diff:
+   ```bash
+   docker exec <container_id> bash -c 'cd /testbed && git diff --no-color HEAD'
+   ```

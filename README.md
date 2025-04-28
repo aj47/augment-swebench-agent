@@ -142,7 +142,15 @@ If you're using macOS, we provide a specialized script that handles Docker socke
 python run_swebench_mac.py --problem-ids "django__django-10097" --num-candidate-solutions 1
 ```
 
-This script is specifically designed to work with Docker Desktop on macOS. For more details, see the [SWEBENCH_MAC_README.md](SWEBENCH_MAC_README.md) file.
+This script is specifically designed to work with Docker Desktop on macOS. It includes several robustness improvements:
+
+- Enhanced Docker command execution with retries and timeouts
+- Improved container lifecycle management
+- More robust volume path handling
+- Multiple strategies for diff generation
+- Better evaluation process with retries
+
+For more details, see the [SWEBENCH_MAC_README.md](SWEBENCH_MAC_README.md) and [DOCKER_ROBUSTNESS_IMPROVEMENTS.md](DOCKER_ROBUSTNESS_IMPROVEMENTS.md) files.
 
 ### Finding Problem IDs
 
@@ -215,6 +223,29 @@ Try the following solutions:
 5. **Restart Docker**: Sometimes simply restarting the Docker daemon resolves connection issues:
    - Linux: `sudo systemctl restart docker`
    - macOS: Restart Docker Desktop application
+
+6. **Container Not Running After Creation**: If you see messages like "Container is not running after creation":
+   ```bash
+   # Check the container status
+   docker ps -a | grep sweb.augment
+
+   # Try to start the container manually
+   docker start <container_id>
+   ```
+
+7. **Volume Path Access Problems**: If you see "Failed to set permissions" or "Repository path does not exist":
+   ```bash
+   # Check the Docker volume
+   docker inspect <container_id> --format='{{.Mounts}}'
+   ```
+
+8. **Diff Generation Failures**: If you see "All diff generation methods failed":
+   ```bash
+   # Generate a diff manually
+   docker exec <container_id> bash -c 'cd /testbed && git diff --no-color HEAD'
+   ```
+
+For more detailed information about Docker robustness improvements, see [DOCKER_ROBUSTNESS_IMPROVEMENTS.md](DOCKER_ROBUSTNESS_IMPROVEMENTS.md).
 
 ### Majority Vote Ensembler
 

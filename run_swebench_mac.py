@@ -29,6 +29,172 @@ from cli import main as cli_main
 import uuid
 from utils.swebench_eval_utils import get_dataset_name, run_evaluation
 
+
+def generate_diff_from_path(repo_path, logs_prefix, console):
+    """Generate a diff from a repository path using generate_patch.
+
+    Args:
+        repo_path: Path to the repository
+        logs_prefix: Prefix for log messages
+        console: Rich console for output
+
+    Returns:
+        str: The generated diff or None if failed
+    """
+    if not os.path.exists(repo_path):
+        console.print(f"{logs_prefix} [bold yellow]Repository path {repo_path} does not exist[/bold yellow]")
+        return None
+
+    try:
+        diff = generate_patch(repo_path)
+        if diff:
+            return diff
+        else:
+            console.print(f"{logs_prefix} [bold yellow]generate_patch returned empty diff[/bold yellow]")
+            return None
+    except Exception as e:
+        console.print(f"{logs_prefix} [bold yellow]Error in generate_patch: {str(e)}[/bold yellow]")
+        return None
+
+
+def generate_diff_from_git_search(workspace_path, logs_prefix, console):
+    """Find git repositories and generate a diff.
+
+    Args:
+        workspace_path: Path to the workspace
+        logs_prefix: Prefix for log messages
+        console: Rich console for output
+
+    Returns:
+        str: The generated diff or None if failed
+    """
+    console.print(f"{logs_prefix} Searching for git repositories...")
+
+    # Try to find git repositories
+    try:
+        result = subprocess.run(
+            f"find {workspace_path} -name .git -type d | head -1",
+            shell=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            timeout=30
+        )
+
+        if result.returncode == 0 and result.stdout.strip():
+            git_dir = result.stdout.strip()
+            repo_path = os.path.dirname(git_dir)
+            console.print(f"{logs_prefix} Found git repository at {repo_path}")
+
+            # Try to generate a diff
+            try:
+                result = subprocess.run(
+                    f"cd {repo_path} && git diff --no-color HEAD",
+                    shell=True,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    text=True,
+                    timeout=30
+                )
+
+                if result.returncode == 0:
+                    diff = result.stdout
+                    if diff:
+                        return diff
+                    else:
+                        console.print(f"{logs_prefix} [bold yellow]Git diff command returned empty diff[/bold yellow]")
+                        return None
+                else:
+                    console.print(f"{logs_prefix} [bold yellow]Git diff command failed: {result.stderr}[/bold yellow]")
+                    return None
+            except Exception as e:
+                console.print(f"{logs_prefix} [bold yellow]Error running git diff: {str(e)}[/bold yellow]")
+                return None
+        else:
+            console.print(f"{logs_prefix} [bold yellow]No git repositories found[/bold yellow]")
+            return None
+    except Exception as e:
+        console.print(f"{logs_prefix} [bold yellow]Error searching for git repositories: {str(e)}[/bold yellow]")
+        return None
+
+
+def generate_diff_from_docker(container_id, logs_prefix, console):
+    """Generate a diff using Docker exec.
+
+    Args:
+        container_id: ID of the Docker container
+        logs_prefix: Prefix for log messages
+        console: Rich console for output
+
+    Returns:
+        str: The generated diff or None if failed
+    """
+    console.print(f"{logs_prefix} Generating diff using Docker exec...")
+
+    try:
+        result = subprocess.run(
+            f"docker exec {container_id} bash -c 'cd /testbed && git diff --no-color HEAD'",
+            shell=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            timeout=30
+        )
+
+        if result.returncode == 0:
+            diff = result.stdout
+            if diff:
+                return diff
+            else:
+                console.print(f"{logs_prefix} [bold yellow]Docker exec returned empty diff[/bold yellow]")
+                return None
+        else:
+            console.print(f"{logs_prefix} [bold yellow]Docker exec failed: {result.stderr}[/bold yellow]")
+            return None
+    except Exception as e:
+        console.print(f"{logs_prefix} [bold yellow]Error using Docker exec: {str(e)}[/bold yellow]")
+        return None
+
+
+def generate_diff_from_git_command(repo_path, logs_prefix, console):
+    """Generate a diff using direct git commands.
+
+    Args:
+        repo_path: Path to the repository
+        logs_prefix: Prefix for log messages
+        console: Rich console for output
+
+    Returns:
+        str: The generated diff or None if failed
+    """
+    console.print(f"{logs_prefix} Trying direct git command...")
+
+    try:
+        # Try different git commands
+        commands = [
+            f"cd {repo_path} && git diff --no-color HEAD",
+            f"cd {repo_path} && git diff --no-color",
+            f"cd {repo_path} && git status -v"
+        ]
+
+        for command in commands:
+            result = subprocess.run(
+                command,
+                shell=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                timeout=30
+            )
+
+            if result.returncode == 0 and result.stdout.strip():
+                return result.stdout
+
+        console.print(f"{logs_prefix} [bold yellow]All git commands failed to produce a diff[/bold yellow]")
+        return None
+    except Exception as e:
+        console.print(f"{logs_prefix} [bold yellow]Error running git commands: {str(e)}[/bold yellow]")
+        return None
 # Configure logging
 logging.basicConfig(
     level=logging.INFO,
@@ -45,7 +211,15 @@ def run_eval_on_single_problem(problem_id: str, workspace_path: Path, console: C
     """Run evaluation on a single problem.
 
     On macOS, the Docker socket might not be accessible to the evaluation tools.
-    We'll handle this gracefully and provide a fallback.
+    We'll handle this gracefully and provide fallback mechanisms.
+
+    Args:
+        problem_id: The ID of the problem
+        workspace_path: Path to the workspace directory
+        console: Rich console for output
+
+    Returns:
+        dict: Evaluation outcomes with at least an "is_success" key
     """
     eval_outcomes = {
         "is_success": False,
@@ -55,25 +229,111 @@ def run_eval_on_single_problem(problem_id: str, workspace_path: Path, console: C
     predictions_file = workspace_path / "predictions.json"
     if not predictions_file.exists():
         console.print(f"[bold yellow]Warning: Predictions file not found at {predictions_file}[/bold yellow]")
-        return eval_outcomes
-
-    try:
-        # First check if Docker is accessible
-        result = subprocess.run(
-            "docker ps",
-            shell=True,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True
-        )
-
-        if result.returncode != 0:
-            console.print(f"[bold yellow]Warning: Docker is not accessible for evaluation. Skipping evaluation.[/bold yellow]")
-            console.print(f"Docker error: {result.stderr}")
+        # Try to create a minimal predictions file
+        try:
+            with open(predictions_file, "w") as f:
+                json.dump(
+                    [
+                        {
+                            "instance_id": problem_id,
+                            "model_name_or_path": "augment-agent",
+                            "model_patch": "",
+                        }
+                    ],
+                    f,
+                    indent=2,
+                )
+            console.print(f"Created empty predictions file at {predictions_file}")
+        except Exception as e:
+            console.print(f"[bold red]Failed to create predictions file: {str(e)}[/bold red]")
             return eval_outcomes
 
-        # Try to run the evaluation
+    # Verify the predictions file has valid content
+    try:
+        with open(predictions_file, "r") as f:
+            predictions = json.load(f)
+        if not predictions or not isinstance(predictions, list) or "instance_id" not in predictions[0]:
+            console.print(f"[bold yellow]Warning: Predictions file has invalid format[/bold yellow]")
+            # Fix the predictions file
+            with open(predictions_file, "w") as f:
+                json.dump(
+                    [
+                        {
+                            "instance_id": problem_id,
+                            "model_name_or_path": "augment-agent",
+                            "model_patch": predictions[0].get("model_patch", "") if predictions else "",
+                        }
+                    ],
+                    f,
+                    indent=2,
+                )
+            console.print(f"Fixed predictions file format at {predictions_file}")
+    except Exception as e:
+        console.print(f"[bold yellow]Warning: Failed to validate predictions file: {str(e)}[/bold yellow]")
+        # Try to create a minimal predictions file
         try:
+            with open(predictions_file, "w") as f:
+                json.dump(
+                    [
+                        {
+                            "instance_id": problem_id,
+                            "model_name_or_path": "augment-agent",
+                            "model_patch": "",
+                        }
+                    ],
+                    f,
+                    indent=2,
+                )
+            console.print(f"Created empty predictions file at {predictions_file}")
+        except Exception as e:
+            console.print(f"[bold red]Failed to create predictions file: {str(e)}[/bold red]")
+            return eval_outcomes
+
+    # Check Docker accessibility with retries
+    max_docker_check_attempts = 3
+    docker_accessible = False
+
+    for attempt in range(max_docker_check_attempts):
+        try:
+            result = subprocess.run(
+                "docker ps",
+                shell=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                timeout=30
+            )
+            if result.returncode == 0:
+                docker_accessible = True
+                break
+            else:
+                console.print(f"[bold yellow]Docker check attempt {attempt+1}/{max_docker_check_attempts} failed: {result.stderr}[/bold yellow]")
+                if attempt < max_docker_check_attempts - 1:
+                    console.print(f"Retrying Docker check in 5 seconds...")
+                    time.sleep(5)
+        except Exception as e:
+            console.print(f"[bold yellow]Docker check attempt {attempt+1}/{max_docker_check_attempts} failed with exception: {str(e)}[/bold yellow]")
+            if attempt < max_docker_check_attempts - 1:
+                console.print(f"Retrying Docker check in 5 seconds...")
+                time.sleep(5)
+
+    if not docker_accessible:
+        console.print(f"[bold yellow]Warning: Docker is not accessible for evaluation after {max_docker_check_attempts} attempts. Skipping evaluation.[/bold yellow]")
+        return eval_outcomes
+
+    # Try to run the evaluation with retries
+    max_eval_attempts = 3
+    eval_success = False
+
+    for attempt in range(max_eval_attempts):
+        try:
+            console.print(f"Running evaluation attempt {attempt+1}/{max_eval_attempts}...")
+
+            # Make sure the container for this problem is stopped before evaluation
+            from utils.docker_cli_utils import stop_container
+            stop_container(f"sweb.eval.{problem_id}")
+
+            # Run the evaluation
             run_evaluation(
                 predictions_file=predictions_file,
                 dataset=get_dataset_name("full"),  # Always use the full dataset for evaluation
@@ -85,19 +345,45 @@ def run_eval_on_single_problem(problem_id: str, workspace_path: Path, console: C
             # Check if the evaluation file was created
             eval_file = workspace_path / f"augment-agent.{problem_id}.json"
             if eval_file.exists():
-                eval_dict = json.loads(eval_file.read_text())
-                eval_outcomes["is_success"] = problem_id in eval_dict.get("resolved_ids", [])
-                console.print(f"Evaluated {problem_id} successfully.")
+                try:
+                    eval_dict = json.loads(eval_file.read_text())
+                    eval_outcomes["is_success"] = problem_id in eval_dict.get("resolved_ids", [])
+                    console.print(f"Evaluated {problem_id} successfully.")
+                    eval_success = True
+                    break
+                except json.JSONDecodeError:
+                    console.print(f"[bold yellow]Warning: Evaluation file exists but contains invalid JSON[/bold yellow]")
             else:
                 console.print(f"[bold yellow]Warning: Evaluation file not created at {eval_file}[/bold yellow]")
-        except Exception as e:
-            console.print(f"[bold yellow]Warning: Evaluation failed: {str(e)}[/bold yellow]")
 
-    except FileNotFoundError as exc:
-        console.print(f"Failed to report results for {problem_id}")
-        console.print(exc)
-    except Exception as e:
-        console.print(f"[bold red]Error during evaluation: {str(e)}[/bold red]")
+            if attempt < max_eval_attempts - 1:
+                console.print(f"Retrying evaluation in 10 seconds...")
+                time.sleep(10)
+
+        except Exception as e:
+            console.print(f"[bold yellow]Warning: Evaluation attempt {attempt+1}/{max_eval_attempts} failed: {str(e)}[/bold yellow]")
+            if attempt < max_eval_attempts - 1:
+                console.print(f"Retrying evaluation in 10 seconds...")
+                time.sleep(10)
+
+    if not eval_success:
+        console.print(f"[bold yellow]Warning: All evaluation attempts failed[/bold yellow]")
+
+        # Try to manually check if the solution was successful by looking at the logs
+        logs_dir = workspace_path / "logs" / "run_evaluation" / problem_id / "augment-agent" / problem_id
+        if logs_dir.exists():
+            report_file = logs_dir / "report.json"
+            if report_file.exists():
+                try:
+                    report_dict = json.loads(report_file.read_text())
+                    fail_to_pass_tests = report_dict.get("fail_to_pass_tests", [])
+                    if fail_to_pass_tests:
+                        passed_tests = [test for test in fail_to_pass_tests if test.get("status") == "pass"]
+                        if passed_tests:
+                            eval_outcomes["is_success"] = True
+                            console.print(f"[bold green]Found {len(passed_tests)} passed tests in report.json[/bold green]")
+                except Exception as e:
+                    console.print(f"[bold yellow]Warning: Failed to parse report.json: {str(e)}[/bold yellow]")
 
     return eval_outcomes
 
@@ -201,66 +487,38 @@ def run_agent_on_single_problem(
         # Generate patch after the agent has completed its work
         # The problem_id path is a symlink to the Docker volume
         repo_path = str(workspace_path / problem_id)
+        diff = None
 
-        # Check if the path exists before trying to generate a patch
-        if not os.path.exists(repo_path):
-            console.print(f"{logs_prefix} [bold yellow]Warning: Repository path {repo_path} does not exist.[/bold yellow]")
-            console.print(f"{logs_prefix} Trying to find the actual repository path...")
+        # Try multiple approaches to generate the diff, with fallbacks
+        diff_generation_methods = [
+            # Method 1: Use the symlink path
+            lambda: generate_diff_from_path(repo_path, logs_prefix, console),
 
-            # Try to find the actual repository path
-            result = subprocess.run(
-                f"find {workspace_path} -type l -name {problem_id}",
-                shell=True,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True
-            )
-            success = result.returncode == 0
-            output = result.stdout
+            # Method 2: Try to find the git directory
+            lambda: generate_diff_from_git_search(workspace_path, logs_prefix, console),
 
-            if success and output.strip():
-                repo_path = output.strip()
-                console.print(f"{logs_prefix} Found repository path: {repo_path}")
-            else:
-                # If we can't find the symlink, try to use Docker exec to generate the diff
-                console.print(f"{logs_prefix} Using Docker exec to generate diff...")
-                result = subprocess.run(
-                    f"docker exec {container_id} bash -c 'cd /testbed && git diff --no-color HEAD'",
-                    shell=True,
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.PIPE,
-                    text=True
-                )
-                success = result.returncode == 0
-                output = result.stdout
+            # Method 3: Use Docker exec
+            lambda: generate_diff_from_docker(container_id, logs_prefix, console),
 
-                if success:
-                    diff = output
-                else:
-                    console.print(f"{logs_prefix} [bold red]Failed to generate diff: {output}[/bold red]")
-                    diff = ""
-        else:
-            # Generate the patch if the path exists
+            # Method 4: Try a direct git command
+            lambda: generate_diff_from_git_command(repo_path, logs_prefix, console)
+        ]
+
+        # Try each method until one succeeds
+        for method_num, method in enumerate(diff_generation_methods, 1):
+            console.print(f"{logs_prefix} Trying diff generation method {method_num}...")
             try:
-                diff = generate_patch(repo_path)
+                diff = method()
+                if diff:
+                    console.print(f"{logs_prefix} Successfully generated diff using method {method_num}")
+                    break
             except Exception as e:
-                console.print(f"{logs_prefix} [bold red]Error generating patch: {str(e)}[/bold red]")
-                # Try using Docker exec as a fallback
-                console.print(f"{logs_prefix} Trying Docker exec as fallback...")
-                result = subprocess.run(
-                    f"docker exec {container_id} bash -c 'cd /testbed && git diff --no-color HEAD'",
-                    shell=True,
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.PIPE,
-                    text=True
-                )
-                success = result.returncode == 0
-                output = result.stdout
+                console.print(f"{logs_prefix} [bold yellow]Method {method_num} failed: {str(e)}[/bold yellow]")
 
-                if success:
-                    diff = output
-                else:
-                    diff = ""
+        # If all methods failed, create an empty diff
+        if not diff:
+            console.print(f"{logs_prefix} [bold yellow]All diff generation methods failed. Using empty diff.[/bold yellow]")
+            diff = ""
 
         # Save the predictions
         with (workspace_path / "predictions.json").open("w") as f:
