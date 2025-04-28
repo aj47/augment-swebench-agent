@@ -12,6 +12,7 @@ import threading
 import sys
 import json
 import argparse
+import subprocess
 from pathlib import Path
 from multiprocessing import Manager
 import time
@@ -41,31 +42,63 @@ logger = logging.getLogger(__name__)
 
 
 def run_eval_on_single_problem(problem_id: str, workspace_path: Path, console: Console):
-    eval_file = None
+    """Run evaluation on a single problem.
 
+    On macOS, the Docker socket might not be accessible to the evaluation tools.
+    We'll handle this gracefully and provide a fallback.
+    """
     eval_outcomes = {
         "is_success": False,
     }
 
+    # Check if the predictions file exists
+    predictions_file = workspace_path / "predictions.json"
+    if not predictions_file.exists():
+        console.print(f"[bold yellow]Warning: Predictions file not found at {predictions_file}[/bold yellow]")
+        return eval_outcomes
+
     try:
-        run_evaluation(
-            predictions_file=workspace_path / "predictions.json",
-            dataset=get_dataset_name(
-                "full"
-            ),  # Always use the full dataset for evaluation.
-            run_id=problem_id,
-            swebench_venv_path=Path(
-                f"{os.environ['HOME']}/swebench_eval_tools_env/bin/python"
-            ),
-            console=console,
+        # First check if Docker is accessible
+        result = subprocess.run(
+            "docker ps",
+            shell=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True
         )
-        eval_file = workspace_path / f"augment-agent.{problem_id}.json"
-        eval_dict = json.loads(eval_file.read_text())
-        eval_outcomes["is_success"] = problem_id in eval_dict["resolved_ids"]
-        console.print(f"Evaluated {problem_id} successfully.")
+
+        if result.returncode != 0:
+            console.print(f"[bold yellow]Warning: Docker is not accessible for evaluation. Skipping evaluation.[/bold yellow]")
+            console.print(f"Docker error: {result.stderr}")
+            return eval_outcomes
+
+        # Try to run the evaluation
+        try:
+            run_evaluation(
+                predictions_file=predictions_file,
+                dataset=get_dataset_name("full"),  # Always use the full dataset for evaluation
+                run_id=problem_id,
+                swebench_venv_path=Path(f"{os.environ['HOME']}/swebench_eval_tools_env/bin/python"),
+                console=console,
+            )
+
+            # Check if the evaluation file was created
+            eval_file = workspace_path / f"augment-agent.{problem_id}.json"
+            if eval_file.exists():
+                eval_dict = json.loads(eval_file.read_text())
+                eval_outcomes["is_success"] = problem_id in eval_dict.get("resolved_ids", [])
+                console.print(f"Evaluated {problem_id} successfully.")
+            else:
+                console.print(f"[bold yellow]Warning: Evaluation file not created at {eval_file}[/bold yellow]")
+        except Exception as e:
+            console.print(f"[bold yellow]Warning: Evaluation failed: {str(e)}[/bold yellow]")
+
     except FileNotFoundError as exc:
         console.print(f"Failed to report results for {problem_id}")
         console.print(exc)
+    except Exception as e:
+        console.print(f"[bold red]Error during evaluation: {str(e)}[/bold red]")
+
     return eval_outcomes
 
 
@@ -116,10 +149,11 @@ def run_agent_on_single_problem(
         original_argv = sys.argv.copy()
 
         # Create new sys.argv for cli.py
+        # The workspace should be the directory containing the symlink to the Docker volume
         cli_args = [
             "cli.py",
             "--workspace",
-            str(workspace_path / problem_id),
+            str(workspace_path),  # Use the workspace path without appending problem_id
             "--problem-statement",
             problem_statement,
             "--docker-container-id",
@@ -133,13 +167,31 @@ def run_agent_on_single_problem(
         if output_file:
             cli_args.extend(["--logs-path", str(output_file)])
 
+        # Don't add debug flag as it's not supported by the CLI
+
         # Replace sys.argv with our custom arguments
         sys.argv = cli_args
 
         # Run the agent via cli.py
         console.print(f"{logs_prefix} Starting agent run...")
+        console.print(f"{logs_prefix} CLI arguments: {cli_args}")
+
+        # Log environment variables that might be relevant
+        console.print(f"{logs_prefix} Workspace path: {workspace_path}")
+        console.print(f"{logs_prefix} Docker container ID: {container_id}")
+
+        # Check if the workspace directory exists
+        if not os.path.exists(str(workspace_path / problem_id)):
+            console.print(f"{logs_prefix} [bold yellow]Warning: Workspace path {workspace_path / problem_id} does not exist.[/bold yellow]")
+
         start_time = time.time()
-        cli_main()
+        try:
+            cli_main()
+        except Exception as e:
+            console.print(f"{logs_prefix} [bold red]Error during CLI execution: {str(e)}[/bold red]")
+            logger.exception(f"Error during CLI execution for {problem_id}")
+            raise
+
         agent_duration = time.time() - start_time
         console.print(f"{logs_prefix} Agent run completed in {agent_duration:.2f}s.")
 
@@ -147,8 +199,70 @@ def run_agent_on_single_problem(
         sys.argv = original_argv
 
         # Generate patch after the agent has completed its work
+        # The problem_id path is a symlink to the Docker volume
         repo_path = str(workspace_path / problem_id)
-        diff = generate_patch(repo_path)
+
+        # Check if the path exists before trying to generate a patch
+        if not os.path.exists(repo_path):
+            console.print(f"{logs_prefix} [bold yellow]Warning: Repository path {repo_path} does not exist.[/bold yellow]")
+            console.print(f"{logs_prefix} Trying to find the actual repository path...")
+
+            # Try to find the actual repository path
+            result = subprocess.run(
+                f"find {workspace_path} -type l -name {problem_id}",
+                shell=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True
+            )
+            success = result.returncode == 0
+            output = result.stdout
+
+            if success and output.strip():
+                repo_path = output.strip()
+                console.print(f"{logs_prefix} Found repository path: {repo_path}")
+            else:
+                # If we can't find the symlink, try to use Docker exec to generate the diff
+                console.print(f"{logs_prefix} Using Docker exec to generate diff...")
+                result = subprocess.run(
+                    f"docker exec {container_id} bash -c 'cd /testbed && git diff --no-color HEAD'",
+                    shell=True,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    text=True
+                )
+                success = result.returncode == 0
+                output = result.stdout
+
+                if success:
+                    diff = output
+                else:
+                    console.print(f"{logs_prefix} [bold red]Failed to generate diff: {output}[/bold red]")
+                    diff = ""
+        else:
+            # Generate the patch if the path exists
+            try:
+                diff = generate_patch(repo_path)
+            except Exception as e:
+                console.print(f"{logs_prefix} [bold red]Error generating patch: {str(e)}[/bold red]")
+                # Try using Docker exec as a fallback
+                console.print(f"{logs_prefix} Trying Docker exec as fallback...")
+                result = subprocess.run(
+                    f"docker exec {container_id} bash -c 'cd /testbed && git diff --no-color HEAD'",
+                    shell=True,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    text=True
+                )
+                success = result.returncode == 0
+                output = result.stdout
+
+                if success:
+                    diff = output
+                else:
+                    diff = ""
+
+        # Save the predictions
         with (workspace_path / "predictions.json").open("w") as f:
             json.dump(
                 [
@@ -186,7 +300,11 @@ def run_agent_on_single_problem(
         console.print(f"{logs_prefix} [bold red]Error during evaluation: {str(e)}[/bold red]")
         logger.exception(f"Error during evaluation for {problem_id}")
 
-    assert diff is not None
+    # If diff is None, set it to an empty string
+    if diff is None:
+        diff = ""
+        console.print(f"{logs_prefix} [bold yellow]Warning: No diff was generated.[/bold yellow]")
+
     return diff, agent_duration, eval_outcomes
 
 

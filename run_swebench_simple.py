@@ -54,24 +54,24 @@ def run_swebench_problem(problem_id, problem_statement, workspace_path):
     """Run a SWEBench problem using Docker CLI commands."""
     console = Console()
     logs_prefix = f"[bold blue]{problem_id}[/bold blue]"
-    
+
     # Create workspace directory
     workspace_path.mkdir(parents=True, exist_ok=True)
-    
+
     # Get the Docker image name
     image_name = get_issue_image_name(problem_id)
     console.print(f"{logs_prefix} Using Docker image: {image_name}")
-    
+
     # Pull the Docker image
     console.print(f"{logs_prefix} Pulling Docker image...")
     success, output = run_command(f"docker pull {image_name}")
     if not success:
         console.print(f"{logs_prefix} [bold red]Failed to pull Docker image: {output}[/bold red]")
         return False
-    
+
     # Generate a unique container name
     container_name = f"sweb.augment.{problem_id}_{uuid.uuid4().hex[:8]}"
-    
+
     try:
         # Run the Docker container
         console.print(f"{logs_prefix} Starting Docker container...")
@@ -85,46 +85,53 @@ def run_swebench_problem(problem_id, problem_statement, workspace_path):
         if not success:
             console.print(f"{logs_prefix} [bold red]Failed to start Docker container: {output}[/bold red]")
             return False
-        
+
         container_id = output.strip()
         console.print(f"{logs_prefix} Docker container started with ID: {container_id}")
-        
+
         # Wait for the container to start
         time.sleep(5)
-        
+
         # Get the volume path
         success, output = run_command(f"docker inspect --format='{{{{.Mounts}}}}' {container_id}")
         if not success:
             console.print(f"{logs_prefix} [bold red]Failed to get volume info: {output}[/bold red]")
             return False
-        
+
         # Parse the volume path from the output
         volume_info = output.strip()
         volume_parts = volume_info.split()
         if len(volume_parts) < 3:
             console.print(f"{logs_prefix} [bold red]Failed to parse volume path from: {volume_info}[/bold red]")
             return False
-        
+
         volume_path = Path(volume_parts[2])
         console.print(f"{logs_prefix} Docker volume path: {volume_path}")
-        
+
         # Create a symlink to the volume
         problem_link = workspace_path / problem_id
         problem_link.unlink(missing_ok=True)
         problem_link.symlink_to(volume_path)
         console.print(f"{logs_prefix} Created symlink from {problem_link} to {volume_path}")
-        
-        # Set permissions on the volume
+
+        # Set permissions on the volume using Docker exec
         console.print(f"{logs_prefix} Setting permissions on volume...")
-        run_command(f"sudo chmod -R a+rwx {volume_path}", check=False)
-        
+        # Wait a bit to make sure the container is fully started
+        time.sleep(5)
+        # Check if the container is running
+        success, output = run_command(f'docker inspect --format="{{{{.State.Running}}}}" {container_id}')
+        if success and output.strip().lower() == "true":
+            run_command(f"docker exec {container_id} bash -c 'chmod -R a+rwx /testbed'", check=False)
+        else:
+            console.print(f"{logs_prefix} [bold yellow]Warning: Container is not running, skipping permission setting[/bold yellow]")
+
         # Write the problem statement to a file
         with open(workspace_path / "problem_statement.txt", "w") as f:
             f.write(problem_statement)
-        
+
         console.print(f"{logs_prefix} Problem setup complete. You can now work with the problem at {workspace_path}")
         console.print(f"{logs_prefix} To access the Docker container, run: docker exec -it {container_id} bash")
-        
+
         return True
     except Exception as e:
         console.print(f"{logs_prefix} [bold red]Error: {str(e)}[/bold red]")
@@ -150,7 +157,7 @@ def main():
         default=None,
         help="Custom workspace directory (default: /tmp/swebench_workspace/UUID)",
     )
-    
+
     args = parser.parse_args()
 
     # Initialize console
@@ -189,13 +196,13 @@ def main():
         problem_statement = problem.problem_statement
 
         console.print(f"\nProcessing example {i + 1}/{len(examples)}")
-        
+
         # Create a directory for this problem
         problem_workspace = workspace_base_path / problem_id
-        
+
         # Run the problem
         success = run_swebench_problem(problem_id, problem_statement, problem_workspace)
-        
+
         if success:
             console.print(f"[bold green]Successfully set up problem {problem_id}[/bold green]")
         else:
